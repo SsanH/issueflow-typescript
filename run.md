@@ -6,7 +6,7 @@ IssueFlow — setup, build, run, and test instructions.
 
 - **Node 18+** (Node 20 recommended; tested on 20.x and 24.x)
 - **Docker** running (Docker Desktop, OrbStack, or colima)
-- macOS / Linux. Untested on Windows.
+- macOS, Linux, WSL, or native Windows (PowerShell / cmd) — verified on all four
 
 ## Quickstart (recommended)
 
