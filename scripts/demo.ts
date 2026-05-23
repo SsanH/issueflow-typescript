@@ -175,10 +175,17 @@ function preflight(): void {
 
 // ─── Setup ──────────────────────────────────────────────────────────────
 async function ensurePostgres(): Promise<void> {
-  // Check if compose's db container is up
-  const ps = execSync('docker compose ps --format json db 2>/dev/null || true', {
-    encoding: 'utf8',
-  });
+  // Check if compose's db container is up. Wrap in try/catch instead of
+  // shell `|| true` so this works on Unix shells AND Windows cmd.exe.
+  let ps = '';
+  try {
+    ps = execSync('docker compose ps --format json db', {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch {
+    /* container not running yet — that's fine, we'll start it below */
+  }
   if (!ps.includes('running')) {
     console.log(`  ${c.yellow('•')} Postgres container not running, starting...`);
     execSync('docker compose up -d', { stdio: 'inherit' });
@@ -211,23 +218,48 @@ async function runMigrations(): Promise<void> {
 let appProcess: ChildProcess | null = null;
 
 async function startApp(): Promise<void> {
-  // Kill anything on port 3000 first
+  // Best-effort: kill anything on port 3000 first. Platform-aware because
+  // lsof/kill are Unix-only and netstat/taskkill are Windows-only.
   try {
-    const pids = execSync('lsof -t -i :3000 2>/dev/null || true', {
-      encoding: 'utf8',
-    }).trim();
-    if (pids) {
-      execSync(`kill -9 ${pids.split('\n').join(' ')} 2>/dev/null || true`);
-      await sleep(500);
+    if (process.platform === 'win32') {
+      const out = execSync(
+        'netstat -ano | findstr :3000 | findstr LISTENING',
+        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] },
+      );
+      const pids = Array.from(
+        new Set(
+          out
+            .split('\n')
+            .map((line) => line.trim().split(/\s+/).pop() || '')
+            .filter((p) => /^\d+$/.test(p)),
+        ),
+      );
+      for (const pid of pids) {
+        try {
+          execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' });
+        } catch {
+          /* ignore */
+        }
+      }
+    } else {
+      const pids = execSync('lsof -t -i :3000', {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'ignore'],
+      }).trim();
+      if (pids) {
+        execSync(`kill -9 ${pids.split('\n').join(' ')}`, { stdio: 'ignore' });
+      }
     }
+    await sleep(500);
   } catch {
-    /* ignore */
+    /* nothing on port 3000 — that's fine */
   }
 
   console.log(`  ${c.yellow('•')} Starting IssueFlow app...`);
   appProcess = spawn('npm', ['start'], {
     stdio: ['ignore', 'ignore', 'ignore'],
     detached: false,
+    shell: true, // Windows needs this to resolve `npm.cmd`. Harmless on Unix.
     env: { ...process.env, NODE_ENV: 'development' },
   });
 
